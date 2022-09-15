@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PHP Shift Planning (JavaScript/HTML5 Frontend, MySQL Database)</title>
+  <link href="index.css" rel="stylesheet" type="text/css"/>
+
+  <!-- DayPilot library -->
+  <script src="js/daypilot/daypilot-all.min.js"></script>
+</head>
+<body>
+<div class="header">
+  <h1><a href='https://code.daypilot.org/61166/php-shift-planning-javascript-html5-mysql-database'>PHP Shift Planning (JavaScript/HTML5 Frontend, MySQL Database)</a></h1>
+  <div><a href="https://javascript.daypilot.org/">DayPilot for JavaScript</a> - HTML5 Calendar/Scheduling Components for JavaScript/Angular/React
+  </div>
+</div>
+
+<div class="main">
+  <div class="space">
+    Location: <select id="locations"></select>
+  </div>
+  <div id="dp"></div>
+</div>
+
+<script>
+  var locations = {
+    list: [],
+    find: function (id) {
+      if (!locations.list) {
+        return null;
+      }
+      return locations.list.find(function (item) {
+        return item.id === id;
+      });
+    },
+    element: document.querySelector("#locations"),
+    activate: function (location) {
+      var item = location;
+      if (typeof location !== "object") {
+        item = locations.find(location);
+      }
+      dp.events.list = [];
+      dp.rows.load("backend_people.php", function (args) {
+        args.data.splice(0, 0, {id: "L" + item.id, name: item.name, type: "location"});
+      });
+      dp.events.load("backend_assignments.php?location=" + item.id);
+    },
+    load: function () {
+      DayPilot.Http.ajax({
+        url: "backend_locations.php",
+        success: function(ajax) {
+          locations.list = ajax.data;
+          locations.element.innerHTML = '';
+
+          locations.list.forEach(function (item) {
+            var option = document.createElement("option");
+            option.value = item.id;
+            option.innerText = item.name;
+            locations.element.appendChild(option);
+          });
+
+          locations.activate(locations.list[0]);
+        }
+      });
+    },
+    init: function() {
+      window.addEventListener("DOMContentLoaded", function() {
+        locations.element.addEventListener("change", function(ev) {
+          locations.activate(this.value);
+        });
+
+        locations.load();
+      });
+    }
+  };
+
+  locations.init();
+
+  var dp = new DayPilot.Scheduler("dp", {
+    cellWidth: 40,
+    timeHeaders: [{groupBy: "Month"}, {groupBy: "Day", format: "dddd M/d/yyyy"}, {groupBy: "Cell"}],
+    startDate: "2018-07-01",
+    days: 31,
+    onBeforeTimeHeaderRender: function (args) {
+      if (args.header.level === 2) {
+        args.header.html = args.header.start.toString("h") + args.header.start.toString("tt").substring(0, 1).toLowerCase();
+      }
+    },
+    businessBeginsHour: 8,
+    businessEndsHour: 16,
+    scale: "Manual",
+    timeline: getTimeline(),
+    cellWidth: 80,
+    eventHeight: 40,
+    headerHeight: 30,
+    treeEnabled: true,
+    allowEventOverlap: false,
+    multiMoveVerticalMode: "Master",
+    eventResizeHandling: "Disabled",
+    rowHeaderColumns: [
+      {name: "Name", display: "name"},
+      {name: "Total"}
+    ],
+    onTimeRangeSelected: function (args) {
+      var dp = this;
+
+      var row = dp.rows.find(args.resource);
+      if (row.index === 0) {
+        DayPilot.Modal.alert("No assignment for this shift.<br><br>Click below to create a new assignment.").then(function (modal) {
+          dp.clearSelection();
+        });
+        return;
+      }
+
+      DayPilot.Modal.confirm("Create a new assignment?").then(function (modal) {
+        dp.clearSelection();
+        if (!modal.result) {
+          return;
+        }
+
+        var locationId = locations.element.value;
+
+        DayPilot.Http.ajax({
+          url: "backend_create.php",
+          method: "POST",
+          data: {
+            start: args.start,
+            end: args.end,
+            location: locationId,
+            person: args.resource
+          },
+          success: function (rargs) {
+
+            var id = rargs.data.id;
+
+            dp.events.add(new DayPilot.Event({
+              start: args.start,
+              end: args.end,
+              id: id,
+              resource: args.resource,
+              location: locationId,
+              person: args.resource,
+              join: id
+            }));
+
+
+            dp.events.add(new DayPilot.Event({
+              start: args.start,
+              end: args.end,
+              id: "L" + id,
+              resource: "L" + locationId,
+              location: locationId,
+              person: args.resource,
+              type: "location",
+              join: id
+            }));
+          }
+        });
+      });
+    },
+    onBeforeCellRender: function (args) {
+      if (args.cell.y === 0) {
+        args.cell.backColor = "#e0b4a8";
+      }
+    },
+    onBeforeRowHeaderRender: function (args) {
+      var duration = args.row.events.totalDuration();
+      var columnTotal = args.row.columns[1]
+      if (duration.totalHours() > 0 && columnTotal) {
+        columnTotal.html = duration.totalHours() + "h";
+      }
+      if (args.row.data.type === "location") {
+        args.row.backColor = "#e06146";
+        args.row.fontColor = "#fff";
+        if (columnTotal) {
+          columnTotal.fontColor = "#fff";
+        }
+      }
+    },
+    onEventMove: function (args) {
+      // console.log(args);
+      var e = args.e;
+      if (e.data.type === "location") {
+        DayPilot.Http.ajax({
+          url: "backend_update_time.php",
+          method: "POST",
+          data: {
+            id: e.data.join,
+            start: args.newStart,
+            end: args.newEnd
+          },
+          success: function (rargs) {
+            dp.message(rargs.data.message);
+          }
+        });
+      } else {
+        DayPilot.Http.ajax({
+          url: "backend_update_person.php",
+          method: "POST",
+          data: {
+            id: e.data.join,
+            person: args.newResource
+          },
+          success: function (rargs) {
+            dp.message(rargs.data.message);
+
+            var locationAssignment = dp.events.find("L" + e.data.join);
+            locationAssignment.data.person = args.newResource;
+            dp.events.update(locationAssignment);
+          }
+        });
+      }
+
+    },
+    onTimeRangeSelecting: function (args) {
+      if (args.duration.totalHours() > 8) {
+        args.allowed = false;
+        args.right.enabled = true;
+        args.right.html = "Max duration is 8 hours";
+      }
+    },
+    onBeforeEventRender: function (args) {
+      var isLocation = args.data.type === "location";
+      var inactive = args.data.type === "inactive";
+
+      if (isLocation) {
+        var person = dp.rows.find(args.data.person);
+
+        args.data.backColor = "#bfd9a9";
+        args.data.borderColor = "#7aa35d";
+        args.data.barHidden = true;
+        args.data.html = person.name;
+        args.data.moveVDisabled = true;
+
+        args.data.areas = [
+          {
+            right: 2,
+            top: 2,
+            height: 21,
+            width: 21,
+            cssClass: "scheduler_default_event_delete",
+            style: "background-color: #fff; border: 1px solid #ccc; box-sizing: border-box; border-radius: 10px; padding: 0px;",
+            visibility: "Visible",
+            onClick: function (args) {
+              DayPilot.Modal.confirm("Delete this assignments?").then(function (margs) {
+                if (!margs.result) {
+                  return;
+                }
+                var locationAssignment = args.source;
+                var assignmentId = locationAssignment.data.join;
+                var personAssignment = dp.events.find(assignmentId);
+                DayPilot.Http.ajax({
+                  url: "backend_delete.php",
+                  method: "POST",
+                  data: {id: assignmentId},
+                  success: function (rargs) {
+                    dp.events.remove(locationAssignment);
+                    dp.events.remove(personAssignment);
+                  }
+                });
+              });
+            }
+          }
+        ];
+      } else {
+        var location = locations.find(args.data.location);
+        if (location) {
+          args.data.html = location.name;
+          args.data.moveHDisabled = true;
+        }
+        if (inactive) {
+          args.data.backColor = "#eee";
+          args.data.fontColor = "#666";
+          args.data.barHidden = true;
+          args.data.moveDisabled = true;
+          args.data.resizeDisabled = true;
+        } else {
+          args.data.backColor = "#bfd9a9";
+          args.data.borderColor = "#7aa35d";
+          args.data.barHidden = true;
+        }
+      }
+
+    }
+  });
+  dp.init();
+
+  function getTimeline() {
+    var days = DayPilot.Date.today().daysInMonth();
+    var start = DayPilot.Date.today().firstDayOfMonth();
+
+    var result = [];
+    for (var i = 0; i < days; i++) {
+      var day = start.addDays(i);
+      result.push({
+        start: day.addHours(0),
+        end: day.addHours(8)
+      });
+      result.push({
+        start: day.addHours(8),
+        end: day.addHours(16)
+      });
+      result.push({
+        start: day.addHours(16),
+        end: day.addHours(24)
+      });
+    }
+    return result;
+  }
+</script>
+
+<script>
+/*
+
+  locations.element.addEventListener("change", function(ev) {
+    locations.activate(this.value);
+  });
+
+  locations.load();
+
+*/
+</script>
+
+</body>
+</html>
